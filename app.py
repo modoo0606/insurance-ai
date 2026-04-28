@@ -114,15 +114,21 @@ PDF 텍스트:
         df = df[columns]
 
         st.subheader("📊 제안서 비교표")
-        st.dataframe(df, use_container_width=True)
+        # 파일명은 열 제목으로 사용
+vertical_df = df.set_index("파일명").T
+
+# 인덱스 이름을 비교항목으로 표시
+vertical_df.index.name = "비교항목"
+
+st.dataframe(vertical_df, use_container_width=True)
 
         # CSV 다운로드
         csv = df.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            label="📥 비교표 CSV 다운로드",
-            data=csv,
-            file_name="보험_제안서_비교표.csv",
-            mime="text/csv"
+    label="📥 비교표 CSV 다운로드",
+    data=csv,
+    file_name="보험_제안서_비교표.csv",
+    mime="text/csv"
         )
 
         # 상세 보기
