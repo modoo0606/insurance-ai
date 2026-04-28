@@ -4,55 +4,46 @@ import google.generativeai as genai
 import pandas as pd
 import json
 
-# 1. 페이지 설정
+# 페이지 설정
 st.set_page_config(page_title="AI 보험 비교 분석기", layout="wide")
 st.title("🛡️ 스마트 보험설계사: AI 제안서 자동 분석")
 
-# 2. AI 설정
+# [핵심] API 키를 가져오는 가장 안전한 방법
 api_key = st.secrets.get("GOOGLE_API_KEY")
-if not api_key:
-    st.error("⚠️ API 키가 설정되지 않았습니다!")
+
+if api_key:
+    try:
+        genai.configure(api_key=api_key)
+        # 구글 서버에 연결 가능한 모델 목록을 확인하여 자동으로 선택함
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except:
+        st.error("AI 연결에 문제가 있습니다. API 키를 확인해주세요.")
+        st.stop()
+else:
+    st.error("Secrets 설정에 GOOGLE_API_KEY가 없습니다!")
     st.stop()
 
-genai.configure(api_key=api_key)
-
-# 3. 사이드바
-standard_items = ["월 보험료", "일반암 진단비", "유사암 진단비", "뇌혈관질환 진단비", "허혈성심장질환 진단비"]
-selected_items = st.sidebar.multiselect("비교 항목", standard_items, default=standard_items)
-
-# 4. 파일 업로드
-uploaded_files = st.file_uploader("제안서 PDF 업로드", type="pdf", accept_multiple_files=True)
+# 파일 업로드
+uploaded_files = st.file_uploader("제안서 PDF를 업로드하세요", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
-    all_results = []
+    results = []
     for file in uploaded_files:
         with st.spinner(f'{file.name} 분석 중...'):
             try:
-                text = ""
+                # PDF 텍스트 추출 (첫 5페이지만)
                 with pdfplumber.open(file) as pdf:
-                    for page in pdf.pages[:5]:
-                        content = page.extract_text()
-                        if content: text += content
+                    text = "".join([p.extract_text() for p in pdf.pages[:5] if p.extract_text()])
                 
-                # 모델 이름을 'gemini-1.5-flash'로 시도하되, 안되면 'gemini-pro'로 자동 전환
-                try:
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                except:
-                    model = genai.GenerativeModel('gemini-pro')
-                
-                prompt = f"보험 분석가로서 {file.name}에서 {selected_items}를 추출해 JSON으로 응답해줘. 텍스트: {text[:5000]}"
-                
+                # AI에게 분석 요청
+                prompt = f"보험 분석가로서 다음 텍스트에서 보장 내역을 요약해 JSON으로 답해줘: {text[:8000]}"
                 response = model.generate_content(prompt)
-                # 응답에서 JSON만 추출하는 안전한 로직
-                res_text = response.text.strip()
-                if "{" in res_text:
-                    res_text = res_text[res_text.find("{"):res_text.rfind("}")+1]
                 
-                data = json.loads(res_text)
-                all_results.append(data)
-                
+                # 결과 저장
+                results.append({"파일명": file.name, "분석결과": response.text[:200] + "..."})
             except Exception as e:
-                st.error(f"❌ {file.name} 에러: {str(e)}")
+                st.error(f"{file.name} 분석 실패: {e}")
 
-    if all_results:
-        st.table(pd.DataFrame(all_results))
+    if results:
+        st.write("### ✅ 분석 완료")
+        st.table(pd.DataFrame(results))
