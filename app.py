@@ -23,50 +23,66 @@ else:
 def extract_json(text):
     """
     Gemini 응답이 순수 JSON이면 바로 읽고,
-    혹시 앞뒤에 설명 문장이 섞이면 JSON 부분만 찾아서 읽는 함수
+    혹시 앞뒤에 설명 문장이나 코드블록이 섞이면 JSON 부분만 찾아서 읽는 함수
     """
+    if not text:
+        raise ValueError("AI 응답이 비어 있습니다.")
+
+    cleaned = text.strip()
+
+    # ```json ... ``` 형태 제거
+    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+
     try:
-        return json.loads(text)
+        return json.loads(cleaned)
     except Exception:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if match:
             return json.loads(match.group())
         raise ValueError("AI 응답에서 JSON 형식을 찾을 수 없습니다.")
 
 
-# 4. 콤마로 구분된 보장내용을 줄바꿈 불릿으로 바꾸는 함수
+# 4. 보장내용을 보기 좋게 줄바꿈 처리하는 함수
 def format_benefit_text(value):
     """
+    담보 구분은 세미콜론(;) 기준으로 줄바꿈 처리.
+    MRI, PET, CT 같은 콤마 묶음은 그대로 유지.
+
     예:
-    암진단비 3천만원, 유사암진단비 6백만원
+    암진단비 3천만원; 유사암진단비 6백만원; MRI, PET, CT 검사비 30만원
+
     ->
     - 암진단비 3천만원
     - 유사암진단비 6백만원
+    - MRI, PET, CT 검사비 30만원
     """
     if value is None:
         return "확인 필요"
 
     text = str(value).strip()
 
-    if not text or text == "nan":
+    if not text or text.lower() == "nan":
         return "확인 필요"
 
-    # 이미 줄바꿈 불릿 형태면 그대로 사용
-    if text.startswith("- "):
-        return text
-
-    # 확인 필요는 그대로 사용
     if text == "확인 필요":
         return text
 
-    # 콤마 기준으로 분리
-    items = [item.strip() for item in text.split(",") if item.strip()]
-
-    # 콤마가 없으면 그대로 반환
-    if len(items) <= 1:
+    # 이미 불릿 형태면 그대로 사용
+    if text.startswith("- "):
         return text
 
-    return "\n".join([f"- {item}" for item in items])
+    # 1순위: 세미콜론 기준 분리
+    if ";" in text:
+        items = [item.strip() for item in text.split(";") if item.strip()]
+        return "\n".join([f"- {item}" for item in items])
+
+    # 2순위: 줄바꿈이 이미 있으면 각 줄을 불릿 처리
+    if "\n" in text:
+        items = [item.strip("- ").strip() for item in text.split("\n") if item.strip()]
+        return "\n".join([f"- {item}" for item in items])
+
+    # 세미콜론이 없으면 콤마는 건드리지 않음
+    return text
 
 
 # 5. 파일 업로드
@@ -87,6 +103,7 @@ if uploaded_files:
 
                 with pdfplumber.open(file) as pdf:
                     # 보험 제안서는 뒤쪽에 담보표가 있는 경우가 많아서 앞 15페이지까지 읽음
+                    # 너무 느리면 [:10], 더 자세히 보고 싶으면 pdf.pages 전체로 변경 가능
                     for page in pdf.pages[:15]:
                         content = page.extract_text()
                         if content:
@@ -124,9 +141,21 @@ if uploaded_files:
 - 금액은 가능하면 원 단위 또는 만원 단위로 정리해.
 - 담보명과 가입금액이 보이면 같이 적어.
 - 여러 담보가 있으면 핵심 담보 위주로 요약해.
-- 특히 암보장, 뇌보장, 심장보장, 수술비, 입원비는 여러 항목을 콤마로 구분해서 작성해.
-- 예: 암진단비(유사암 제외) 3천만원, 유사암진단비 6백만원, 갑상선암진단비 1천만원
+- 암보장, 뇌보장, 심장보장, 수술비, 입원비, 상해보장, 특이사항은 여러 담보 항목을 세미콜론(;)으로 구분해서 작성해.
+- 단, MRI, PET, CT처럼 하나의 담보 안에 들어가는 검사명 나열은 콤마(,)를 유지해.
+- 단, 위암, 폐암, 간암처럼 하나의 설명 안에 들어가는 질병명 나열도 콤마(,)를 유지해.
+- 단, 1회, 2회처럼 숫자 설명에 들어가는 콤마는 유지해.
+- 담보와 담보 사이를 구분할 때만 세미콜론(;)을 사용해.
 - 반드시 아래 JSON 구조 그대로 답변해.
+
+좋은 예시:
+암진단비(유사암 제외) 3천만원; 유사암진단비 6백만원; 갑상선암(초기제외)진단비 1천만원; 암수술비(유사암 제외) 5백만원; 표적항암약물허가치료비 1억원; 항암중입자방사선치료비 5천만원
+
+좋은 예시:
+상급종합병원 MRI, PET, CT 검사비 30만원; 질병입원일당 3만원; 상해입원일당 3만원
+
+나쁜 예시:
+상급종합병원 MRI; PET; CT 검사비 30만원
 
 JSON 형식:
 {{
@@ -197,7 +226,7 @@ PDF 텍스트:
 
         df = df[column_order]
 
-        # 9. 보장내용 컬럼은 콤마 기준으로 줄바꿈 처리
+        # 9. 보장내용 컬럼은 세미콜론 기준으로 줄바꿈 처리
         benefit_columns = [
             "상해보장",
             "암보장",
@@ -257,7 +286,7 @@ PDF 텍스트:
             mime="text/csv"
         )
 
-        # 13. 파일별 상세 분석
+        # 13. 파일별 전체 상세 보기
         st.subheader("📌 파일별 전체 상세 보기")
 
         for res in all_results:
@@ -269,3 +298,4 @@ PDF 텍스트:
                             st.markdown(format_benefit_text(value))
                         else:
                             st.write(f"**{key}**: {value}")
+                        
