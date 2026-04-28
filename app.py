@@ -15,7 +15,7 @@ if not api_key:
     st.error("⚠️ API 키가 설정되지 않았습니다! Streamlit 'Secrets' 설정에 키를 넣어주세요.")
     st.stop()
 
-# AI 연결 설정 (가장 안정적인 모델 이름으로 변경)
+# AI 연결 설정
 genai.configure(api_key=api_key)
 
 # 2. 분석 항목 설정
@@ -49,8 +49,9 @@ if uploaded_files:
                     st.warning(f"⚠️ {file.name}에서 내용을 읽을 수 없습니다.")
                     continue
 
-                # 모델 호출 (안정적인 gemini-1.5-flash-latest 사용)
-                model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
+                # 모델 이름을 가장 단순한 형태로 변경 (핵심 수정 사항)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                
                 prompt = f"""
                 보험 전문 분석가로서 다음 텍스트에서 {', '.join(selected_items)} 정보를 찾아주세요.
                 응답은 반드시 아래 JSON 형식으로만 작성하세요:
@@ -63,7 +64,6 @@ if uploaded_files:
                 """
                 
                 response = model.generate_content(prompt)
-                # JSON 응답 정제
                 res_text = response.text.replace('```json', '').replace('```', '').strip()
                 data = json.loads(res_text)
                 
@@ -73,7 +73,7 @@ if uploaded_files:
                 all_results.append(row)
                 
             except Exception as e:
-                st.error(f"❌ {file.name} 분석 오류: 모델 연결을 다시 시도 중입니다. (에러내용: {e})")
+                st.error(f"❌ {file.name} 분석 오류가 발생했습니다. (원인: {e})")
 
     if all_results:
         st.subheader("📊 주요 보장 비교표")
