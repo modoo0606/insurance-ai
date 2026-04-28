@@ -8,89 +8,51 @@ import json
 st.set_page_config(page_title="AI 보험 비교 분석기", layout="wide")
 st.title("🛡️ 스마트 보험설계사: AI 제안서 자동 분석")
 
-# 2. AI 설정 (Secrets 확인)
+# 2. AI 설정
 api_key = st.secrets.get("GOOGLE_API_KEY")
-
 if not api_key:
-    st.error("⚠️ API 키가 설정되지 않았습니다! Streamlit 'Secrets' 설정창을 확인해 주세요.")
+    st.error("⚠️ API 키가 설정되지 않았습니다!")
     st.stop()
 
-# 구글 AI 연결 설정
 genai.configure(api_key=api_key)
 
-# 3. 사이드바 설정
-standard_items = [
-    "월 보험료", "일반암 진단비", "유사암 진단비", "뇌혈관질환 진단비", 
-    "허혈성심장질환 진단비", "질병/상해 사망 보험금", "수술비 보장", 
-    "입원비/치료비", "질병/상해 후유장해"
-]
+# 3. 사이드바
+standard_items = ["월 보험료", "일반암 진단비", "유사암 진단비", "뇌혈관질환 진단비", "허혈성심장질환 진단비"]
+selected_items = st.sidebar.multiselect("비교 항목", standard_items, default=standard_items)
 
-with st.sidebar:
-    st.header("⚙️ 분석 관리")
-    selected_items = st.multiselect("비교 항목 선택", standard_items, default=standard_items)
-
-# 4. 파일 업로드 및 분석
-uploaded_files = st.file_uploader("제안서 PDF들을 업로드하세요", type="pdf", accept_multiple_files=True)
+# 4. 파일 업로드
+uploaded_files = st.file_uploader("제안서 PDF 업로드", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
     all_results = []
-    
     for file in uploaded_files:
         with st.spinner(f'{file.name} 분석 중...'):
             try:
-                # PDF 텍스트 추출
-                text_content = ""
+                text = ""
                 with pdfplumber.open(file) as pdf:
-                    # 텍스트가 많은 경우를 대비해 10페이지까지 읽기
-                    for page in pdf.pages[:10]:
+                    for page in pdf.pages[:5]:
                         content = page.extract_text()
-                        if content: text_content += content
+                        if content: text += content
                 
-                if not text_content:
-                    st.warning(f"⚠️ {file.name}에서 내용을 읽을 수 없습니다.")
-                    continue
-
-                # 모델 호출 (공식 풀네임으로 수정)
-                model = genai.GenerativeModel('models/gemini-1.5-flash')
+                # 모델 이름을 'gemini-1.5-flash'로 시도하되, 안되면 'gemini-pro'로 자동 전환
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                except:
+                    model = genai.GenerativeModel('gemini-pro')
                 
-                prompt = f"""
-                보험 전문 분석가로서 다음 텍스트에서 {', '.join(selected_items)} 정보를 찾아주세요.
-                응답은 반드시 아래 JSON 형식으로만 작성하세요. (다른 설명 금지)
-                {{
-                    "보험사": "{file.name.split('.')[0]}",
-                    "결과": {{ "항목": "금액/내용" }},
-                    "요약": "특이사항 요약"
-                }}
-                텍스트: {text_content[:15000]}
-                """
+                prompt = f"보험 분석가로서 {file.name}에서 {selected_items}를 추출해 JSON으로 응답해줘. 텍스트: {text[:5000]}"
                 
                 response = model.generate_content(prompt)
+                # 응답에서 JSON만 추출하는 안전한 로직
+                res_text = response.text.strip()
+                if "{" in res_text:
+                    res_text = res_text[res_text.find("{"):res_text.rfind("}")+1]
                 
-                # 결과 정제
-                res_raw = response.text.strip()
-                if "```json" in res_raw:
-                    res_raw = res_raw.split("```json")[1].split("```")[0]
-                elif "```" in res_raw:
-                    res_raw = res_raw.split("```")[1].split("```")[0]
-                
-                data = json.loads(res_raw)
-                
-                row = {"보험사": data["보험사"]}
-                row.update(data["결과"])
-                row["특이사항"] = data["요약"]
-                all_results.append(row)
+                data = json.loads(res_text)
+                all_results.append(data)
                 
             except Exception as e:
-                st.error(f"❌ {file.name} 분석 중 오류: {str(e)}")
+                st.error(f"❌ {file.name} 에러: {str(e)}")
 
-    # 5. 결과 출력
     if all_results:
-        st.subheader("📊 주요 보장 비교표")
-        df = pd.DataFrame(all_results)
-        table_cols = [c for c in df.columns if c != "특이사항"]
-        st.table(df[table_cols])
-
-        st.subheader("💡 AI 상세 요약")
-        for res in all_results:
-            with st.expander(f"📌 {res['보험사']} 분석 결과"):
-                st.info(res['특이사항'])
+        st.table(pd.DataFrame(all_results))
