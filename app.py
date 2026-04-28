@@ -35,7 +35,7 @@ if uploaded_files:
                 # [핵심 수정] 404 에러를 방지하는 최신 모델 호출 방식
                 # 'models/'를 붙이지 않고 이름만 정확히 입력합니다.
                 response = client.models.generate_content(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.5-flash",
                     contents=f"보험 설계사로서 다음 제안서를 요약해줘: {text_content[:5000]}"
                 )
                 
