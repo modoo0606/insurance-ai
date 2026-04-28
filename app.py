@@ -44,7 +44,7 @@ if uploaded_files:
                 # PDF 텍스트 추출
                 text_content = ""
                 with pdfplumber.open(file) as pdf:
-                    for page in pdf.pages[:5]:
+                    for page in pdf.pages:
                         content = page.extract_text()
                         if content:
                             text_content += content + "\n"
