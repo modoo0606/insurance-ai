@@ -8,7 +8,7 @@ st.set_page_config(page_title="AI 보험 비교 분석기", layout="wide")
 st.title("🛡️ 스마트 보험설계사: AI 제안서 자동 분석")
 
 # 2. AI 설정 (최신 방식)
-api_key = st.secrets.get("GOOGLE_API_KEY")
+api_key = st.secrets.get("GEMINI_API_KEY")
 
 if api_key:
     # 최신 google-genai 클라이언트 생성
