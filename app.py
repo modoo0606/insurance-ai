@@ -2,43 +2,48 @@ import streamlit as st
 import pdfplumber
 import google.generativeai as genai
 import pandas as pd
-import json
 
-# 1. 페이지 설정
+# 페이지 설정
 st.set_page_config(page_title="AI 보험 비교 분석기", layout="wide")
 st.title("🛡️ 스마트 보험설계사: AI 제안서 자동 분석")
 
-# 2. AI 설정 (설계사님의 키를 직접 연결)
-API_KEY = st.secrets.get("GOOGLE_API_KEY", "AIzaSyBwzl5OsJwxlNhOcgNSW4MruQmLtvaTMK4")
-genai.configure(api_key=API_KEY)
+# API 키 가져오기
+api_key = st.secrets.get("GOOGLE_API_KEY")
 
-# 3. 분석 항목
-items = ["월 보험료", "일반암 진단비", "뇌혈관 진단비", "허혈성심장 진단비"]
+if not api_key:
+    st.error("⚠️ [설정 오류] Secrets 창에 GOOGLE_API_KEY를 입력하지 않으셨어요! 위 가이드를 다시 봐주세요.")
+    st.stop()
 
-# 4. 파일 업로드
-files = st.file_uploader("제안서 PDF를 업로드하세요", type="pdf", accept_multiple_files=True)
+# AI 연결
+try:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error(f"⚠️ [연결 오류] API 키는 있는데 연결이 안 돼요: {e}")
+    st.stop()
 
-if files:
-    results = []
-    for file in files:
+# 파일 업로드
+uploaded_files = st.file_uploader("제안서 PDF들을 업로드하세요", type="pdf", accept_multiple_files=True)
+
+if uploaded_files:
+    all_results = []
+    for file in uploaded_files:
         with st.spinner(f'{file.name} 분석 중...'):
             try:
                 # PDF 텍스트 추출
-                text = ""
                 with pdfplumber.open(file) as pdf:
-                    for page in pdf.pages[:3]: # 3페이지만 빠르게 분석
-                        text += page.extract_text() or ""
+                    text = "".join([p.extract_text() for p in pdf.pages[:5] if p.extract_text()])
                 
-                # 모델 호출 (가장 안정적인 경로 지정)
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = f"보험 분석가로서 {items} 정보를 찾아 JSON으로 답해줘. 텍스트: {text[:5000]}"
-                
+                # AI 분석 요청
+                prompt = f"보험 설계사로서 이 제안서의 핵심 보장내용(월보험료, 진단비 등)을 표 형태로 요약해줘: {text[:5000]}"
                 response = model.generate_content(prompt)
                 
-                # 결과 정리
-                results.append({"파일명": file.name, "분석내용": response.text[:100] + "..."})
+                all_results.append({"파일명": file.name, "분석 결과": response.text})
             except Exception as e:
-                st.error(f"❌ {file.name} 오류: {str(e)}")
+                st.error(f"❌ {file.name} 분석 실패: {e}")
 
-    if results:
-        st.table(pd.DataFrame(results))
+    if all_results:
+        st.write("### ✅ 분석 완료!")
+        for res in all_results:
+            with st.expander(f"📌 {res['파일명']} 결과 보기"):
+                st.write(res['분석 결과'])
