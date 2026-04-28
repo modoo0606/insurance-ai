@@ -34,7 +34,42 @@ def extract_json(text):
         raise ValueError("AI 응답에서 JSON 형식을 찾을 수 없습니다.")
 
 
-# 4. 파일 업로드
+# 4. 콤마로 구분된 보장내용을 줄바꿈 불릿으로 바꾸는 함수
+def format_benefit_text(value):
+    """
+    예:
+    암진단비 3천만원, 유사암진단비 6백만원
+    ->
+    - 암진단비 3천만원
+    - 유사암진단비 6백만원
+    """
+    if value is None:
+        return "확인 필요"
+
+    text = str(value).strip()
+
+    if not text or text == "nan":
+        return "확인 필요"
+
+    # 이미 줄바꿈 불릿 형태면 그대로 사용
+    if text.startswith("- "):
+        return text
+
+    # 확인 필요는 그대로 사용
+    if text == "확인 필요":
+        return text
+
+    # 콤마 기준으로 분리
+    items = [item.strip() for item in text.split(",") if item.strip()]
+
+    # 콤마가 없으면 그대로 반환
+    if len(items) <= 1:
+        return text
+
+    return "\n".join([f"- {item}" for item in items])
+
+
+# 5. 파일 업로드
 uploaded_files = st.file_uploader(
     "제안서 PDF들을 업로드하세요",
     type="pdf",
@@ -47,12 +82,11 @@ if uploaded_files:
     for file in uploaded_files:
         with st.spinner(f"{file.name} 분석 중..."):
             try:
-                # 5. PDF 텍스트 추출
+                # 6. PDF 텍스트 추출
                 text_content = ""
 
                 with pdfplumber.open(file) as pdf:
                     # 보험 제안서는 뒤쪽에 담보표가 있는 경우가 많아서 앞 15페이지까지 읽음
-                    # 너무 느리면 [:10], 더 자세히 보고 싶으면 pdf.pages 전체로 변경 가능
                     for page in pdf.pages[:15]:
                         content = page.extract_text()
                         if content:
@@ -62,7 +96,7 @@ if uploaded_files:
                     st.error(f"❌ {file.name}에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF일 수 있습니다.")
                     continue
 
-                # 6. Gemini에게 항목별 JSON 분석 요청
+                # 7. Gemini에게 항목별 JSON 분석 요청
                 prompt = f"""
 너는 보험 제안서를 비교 분석하는 보험 설계 전문가야.
 
@@ -85,12 +119,13 @@ if uploaded_files:
 - 특이사항
 - 종합평가
 
-주의사항:
+중요한 출력 규칙:
 - 없는 정보는 "확인 필요"라고 적어.
 - 금액은 가능하면 원 단위 또는 만원 단위로 정리해.
 - 담보명과 가입금액이 보이면 같이 적어.
 - 여러 담보가 있으면 핵심 담보 위주로 요약해.
-- 같은 항목 안에 여러 내용이 있으면 줄바꿈 없이 한 문장으로 정리해.
+- 특히 암보장, 뇌보장, 심장보장, 수술비, 입원비는 여러 항목을 콤마로 구분해서 작성해.
+- 예: 암진단비(유사암 제외) 3천만원, 유사암진단비 6백만원, 갑상선암진단비 1천만원
 - 반드시 아래 JSON 구조 그대로 답변해.
 
 JSON 형식:
@@ -129,7 +164,7 @@ PDF 텍스트:
             except Exception as e:
                 st.error(f"❌ {file.name} 분석 중 오류 발생: {str(e)}")
 
-    # 7. 결과 출력
+    # 8. 결과 출력
     if all_results:
         st.success("✅ 분석 완료!")
 
@@ -162,7 +197,21 @@ PDF 텍스트:
 
         df = df[column_order]
 
-        # 8. 세로 비교표 만들기
+        # 9. 보장내용 컬럼은 콤마 기준으로 줄바꿈 처리
+        benefit_columns = [
+            "상해보장",
+            "암보장",
+            "뇌보장",
+            "심장보장",
+            "수술비",
+            "입원비",
+            "특이사항"
+        ]
+
+        for col in benefit_columns:
+            df[col] = df[col].apply(format_benefit_text)
+
+        # 10. 세로 비교표 만들기
         st.subheader("📊 제안서 세로 비교표")
 
         vertical_df = df.set_index("파일명").T
@@ -170,7 +219,35 @@ PDF 텍스트:
 
         st.dataframe(vertical_df, use_container_width=True)
 
-        # 9. CSV 다운로드
+        # 11. 표보다 보기 좋은 상세 비교 영역
+        st.subheader("🔎 보장내용 상세 비교")
+
+        important_sections = [
+            "상해보장",
+            "암보장",
+            "뇌보장",
+            "심장보장",
+            "수술비",
+            "입원비",
+            "특이사항",
+            "종합평가"
+        ]
+
+        for section in important_sections:
+            st.markdown(f"### {section}")
+
+            cols = st.columns(len(all_results))
+
+            for idx, res in enumerate(all_results):
+                file_name = res.get("파일명", f"제안서 {idx + 1}")
+                raw_value = res.get(section, "확인 필요")
+                formatted_value = format_benefit_text(raw_value)
+
+                with cols[idx]:
+                    st.markdown(f"**{file_name}**")
+                    st.markdown(formatted_value)
+
+        # 12. CSV 다운로드
         csv = vertical_df.to_csv().encode("utf-8-sig")
 
         st.download_button(
@@ -180,11 +257,15 @@ PDF 텍스트:
             mime="text/csv"
         )
 
-        # 10. 파일별 상세 분석
-        st.subheader("📌 파일별 상세 분석")
+        # 13. 파일별 상세 분석
+        st.subheader("📌 파일별 전체 상세 보기")
 
         for res in all_results:
             with st.expander(f"📄 {res['파일명']} 상세 보기"):
                 for key, value in res.items():
                     if key != "파일명":
-                        st.write(f"**{key}**: {value}")
+                        if key in benefit_columns:
+                            st.markdown(f"**{key}**")
+                            st.markdown(format_benefit_text(value))
+                        else:
+                            st.write(f"**{key}**: {value}")
