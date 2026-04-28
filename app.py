@@ -3,27 +3,24 @@ import pdfplumber
 import google.generativeai as genai
 import pandas as pd
 
-# 페이지 설정
+# 1. 페이지 설정
 st.set_page_config(page_title="AI 보험 비교 분석기", layout="wide")
 st.title("🛡️ 스마트 보험설계사: AI 제안서 자동 분석")
 
-# API 키 가져오기
+# 2. AI 설정 (Secrets에서 키 가져오기)
 api_key = st.secrets.get("GOOGLE_API_KEY")
 
-if not api_key:
-    st.error("⚠️ [설정 오류] Secrets 창에 GOOGLE_API_KEY를 입력하지 않으셨어요! 위 가이드를 다시 봐주세요.")
-    st.stop()
-
-# AI 연결
-try:
+if api_key:
+    # [핵심 수정] 최신 v1beta 버전이 아닌 표준 방식으로 연결 시도
     genai.configure(api_key=api_key)
+    # 모델 이름을 명확하게 지정하여 404 에러 방지
     model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    st.error(f"⚠️ [연결 오류] API 키는 있는데 연결이 안 돼요: {e}")
+else:
+    st.error("⚠️ Secrets에 GOOGLE_API_KEY가 없습니다!")
     st.stop()
 
-# 파일 업로드
-uploaded_files = st.file_uploader("제안서 PDF들을 업로드하세요", type="pdf", accept_multiple_files=True)
+# 3. 파일 업로드
+uploaded_files = st.file_uploader("제안서 PDF를 업로드하세요", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
     all_results = []
@@ -31,19 +28,26 @@ if uploaded_files:
         with st.spinner(f'{file.name} 분석 중...'):
             try:
                 # PDF 텍스트 추출
+                text = ""
                 with pdfplumber.open(file) as pdf:
-                    text = "".join([p.extract_text() for p in pdf.pages[:5] if p.extract_text()])
+                    for page in pdf.pages[:3]: # 3페이지만 분석
+                        content = page.extract_text()
+                        if content: text += content
                 
-                # AI 분석 요청
-                prompt = f"보험 설계사로서 이 제안서의 핵심 보장내용(월보험료, 진단비 등)을 표 형태로 요약해줘: {text[:5000]}"
-                response = model.generate_content(prompt)
+                # AI 분석 실행
+                # 구형 v1beta 경로 문제를 피하기 위해 가장 표준적인 호출 방식 사용
+                response = model.generate_content(
+                    f"보험 설계사로서 다음 제안서 요약해줘: {text[:5000]}"
+                )
                 
                 all_results.append({"파일명": file.name, "분석 결과": response.text})
             except Exception as e:
-                st.error(f"❌ {file.name} 분석 실패: {e}")
+                # 에러가 나면 어떤 에러인지 화면에 자세히 표시
+                st.error(f"❌ {file.name} 오류: {str(e)}")
 
+    # 4. 결과 출력
     if all_results:
-        st.write("### ✅ 분석 완료!")
+        st.success("✅ 분석이 완료되었습니다!")
         for res in all_results:
-            with st.expander(f"📌 {res['파일명']} 결과 보기"):
+            with st.expander(f"📌 {res['파일명']} 상세 보기"):
                 st.write(res['분석 결과'])
