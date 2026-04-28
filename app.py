@@ -1,6 +1,7 @@
 import streamlit as st
 import pdfplumber
 from google import genai
+from google.genai import types
 import pandas as pd
 import json
 import re
@@ -19,27 +20,41 @@ else:
     st.stop()
 
 
-# 3. AI 응답에서 JSON만 추출하는 함수
+# 3. AI 응답에서 JSON만 안전하게 추출하는 함수
 def extract_json(text):
     """
-    Gemini 응답이 순수 JSON이면 바로 읽고,
-    혹시 앞뒤에 설명 문장이나 코드블록이 섞이면 JSON 부분만 찾아서 읽는 함수
+    Gemini 응답에서 JSON 객체 1개만 안전하게 추출.
+    JSON 뒤에 설명문이 붙거나, 코드블록이 섞여도 최대한 처리.
     """
     if not text:
         raise ValueError("AI 응답이 비어 있습니다.")
 
     cleaned = text.strip()
-
-    # ```json ... ``` 형태 제거
     cleaned = cleaned.replace("```json", "").replace("```", "").strip()
 
+    # 1차: 전체가 JSON이면 바로 파싱
     try:
         return json.loads(cleaned)
     except Exception:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        raise ValueError("AI 응답에서 JSON 형식을 찾을 수 없습니다.")
+        pass
+
+    # 2차: 첫 번째 JSON 객체만 파싱
+    try:
+        decoder = json.JSONDecoder()
+        start = cleaned.find("{")
+        if start == -1:
+            raise ValueError("JSON 시작 문자 { 를 찾을 수 없습니다.")
+        obj, end = decoder.raw_decode(cleaned[start:])
+        return obj
+    except Exception:
+        pass
+
+    # 3차: 가장 바깥쪽 JSON처럼 보이는 부분 추출
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+
+    raise ValueError("AI 응답에서 JSON 형식을 찾을 수 없습니다.")
 
 
 # 4. 보장내용을 보기 좋게 줄바꿈 처리하는 함수
@@ -47,14 +62,6 @@ def format_benefit_text(value):
     """
     담보 구분은 세미콜론(;) 기준으로 줄바꿈 처리.
     MRI, PET, CT 같은 콤마 묶음은 그대로 유지.
-
-    예:
-    암진단비 3천만원; 유사암진단비 6백만원; MRI, PET, CT 검사비 30만원
-
-    ->
-    - 암진단비 3천만원
-    - 유사암진단비 6백만원
-    - MRI, PET, CT 검사비 30만원
     """
     if value is None:
         return "확인 필요"
@@ -71,12 +78,12 @@ def format_benefit_text(value):
     if text.startswith("- "):
         return text
 
-    # 1순위: 세미콜론 기준 분리
+    # 세미콜론 기준 분리
     if ";" in text:
         items = [item.strip() for item in text.split(";") if item.strip()]
         return "\n".join([f"- {item}" for item in items])
 
-    # 2순위: 줄바꿈이 이미 있으면 각 줄을 불릿 처리
+    # 줄바꿈이 이미 있으면 각 줄을 불릿 처리
     if "\n" in text:
         items = [item.strip("- ").strip() for item in text.split("\n") if item.strip()]
         return "\n".join([f"- {item}" for item in items])
@@ -102,8 +109,6 @@ if uploaded_files:
                 text_content = ""
 
                 with pdfplumber.open(file) as pdf:
-                    # 보험 제안서는 뒤쪽에 담보표가 있는 경우가 많아서 앞 15페이지까지 읽음
-                    # 너무 느리면 [:10], 더 자세히 보고 싶으면 pdf.pages 전체로 변경 가능
                     for page in pdf.pages[:15]:
                         content = page.extract_text()
                         if content:
@@ -117,7 +122,7 @@ if uploaded_files:
                 prompt = f"""
 너는 보험 제안서를 비교 분석하는 보험 설계 전문가야.
 
-아래 PDF 텍스트를 분석해서 반드시 JSON 형식으로만 답변해.
+아래 PDF 텍스트를 분석해서 JSON 형식으로만 답변해.
 설명 문장, 마크다운, 코드블록은 절대 넣지 마.
 
 분석 기준:
@@ -142,38 +147,17 @@ if uploaded_files:
 - 담보명과 가입금액이 보이면 같이 적어.
 - 여러 담보가 있으면 핵심 담보 위주로 요약해.
 - 암보장, 뇌보장, 심장보장, 수술비, 입원비, 상해보장, 특이사항은 여러 담보 항목을 세미콜론(;)으로 구분해서 작성해.
-- 단, MRI, PET, CT처럼 하나의 담보 안에 들어가는 검사명 나열은 콤마(,)를 유지해.
-- 단, 위암, 폐암, 간암처럼 하나의 설명 안에 들어가는 질병명 나열도 콤마(,)를 유지해.
-- 단, 1회, 2회처럼 숫자 설명에 들어가는 콤마는 유지해.
+- MRI, PET, CT처럼 하나의 담보 안에 들어가는 검사명 나열은 콤마(,)를 유지해.
+- 위암, 폐암, 간암처럼 하나의 설명 안에 들어가는 질병명 나열도 콤마(,)를 유지해.
 - 담보와 담보 사이를 구분할 때만 세미콜론(;)을 사용해.
-- 반드시 아래 JSON 구조 그대로 답변해.
 
 좋은 예시:
-암진단비(유사암 제외) 3천만원; 유사암진단비 6백만원; 갑상선암(초기제외)진단비 1천만원; 암수술비(유사암 제외) 5백만원; 표적항암약물허가치료비 1억원; 항암중입자방사선치료비 5천만원
+암진단비(유사암 제외) 3천만원; 유사암진단비 6백만원; 갑상선암(초기제외)진단비 1천만원; 암수술비(유사암 제외) 5백만원
 
 좋은 예시:
 상급종합병원 MRI, PET, CT 검사비 30만원; 질병입원일당 3만원; 상해입원일당 3만원
 
-나쁜 예시:
-상급종합병원 MRI; PET; CT 검사비 30만원
-
-JSON 형식:
-{{
-  "보험사": "",
-  "상품명": "",
-  "월보험료": "",
-  "가입나이": "",
-  "납입기간": "",
-  "보장기간": "",
-  "상해보장": "",
-  "암보장": "",
-  "뇌보장": "",
-  "심장보장": "",
-  "수술비": "",
-  "입원비": "",
-  "특이사항": "",
-  "종합평가": ""
-}}
+아래 키를 가진 JSON 객체 1개만 반환해.
 
 PDF 텍스트:
 {text_content[:12000]}
@@ -181,12 +165,49 @@ PDF 텍스트:
 
                 response = client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=prompt
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema={
+                            "type": "object",
+                            "properties": {
+                                "보험사": {"type": "string"},
+                                "상품명": {"type": "string"},
+                                "월보험료": {"type": "string"},
+                                "가입나이": {"type": "string"},
+                                "납입기간": {"type": "string"},
+                                "보장기간": {"type": "string"},
+                                "상해보장": {"type": "string"},
+                                "암보장": {"type": "string"},
+                                "뇌보장": {"type": "string"},
+                                "심장보장": {"type": "string"},
+                                "수술비": {"type": "string"},
+                                "입원비": {"type": "string"},
+                                "특이사항": {"type": "string"},
+                                "종합평가": {"type": "string"}
+                            },
+                            "required": [
+                                "보험사",
+                                "상품명",
+                                "월보험료",
+                                "가입나이",
+                                "납입기간",
+                                "보장기간",
+                                "상해보장",
+                                "암보장",
+                                "뇌보장",
+                                "심장보장",
+                                "수술비",
+                                "입원비",
+                                "특이사항",
+                                "종합평가"
+                            ]
+                        }
+                    )
                 )
 
                 result = extract_json(response.text)
 
-                # 파일명을 결과에 추가
                 result["파일명"] = file.name
                 all_results.append(result)
 
@@ -197,10 +218,8 @@ PDF 텍스트:
     if all_results:
         st.success("✅ 분석 완료!")
 
-        # 기본 DataFrame 생성
         df = pd.DataFrame(all_results)
 
-        # 컬럼 순서 고정
         column_order = [
             "파일명",
             "보험사",
@@ -219,14 +238,12 @@ PDF 텍스트:
             "종합평가"
         ]
 
-        # 혹시 빠진 컬럼이 있으면 빈칸으로 채움
         for col in column_order:
             if col not in df.columns:
                 df[col] = "확인 필요"
 
         df = df[column_order]
 
-        # 9. 보장내용 컬럼은 세미콜론 기준으로 줄바꿈 처리
         benefit_columns = [
             "상해보장",
             "암보장",
@@ -240,7 +257,7 @@ PDF 텍스트:
         for col in benefit_columns:
             df[col] = df[col].apply(format_benefit_text)
 
-        # 10. 세로 비교표 만들기
+        # 9. 세로 비교표
         st.subheader("📊 제안서 세로 비교표")
 
         vertical_df = df.set_index("파일명").T
@@ -248,7 +265,7 @@ PDF 텍스트:
 
         st.dataframe(vertical_df, use_container_width=True)
 
-        # 11. 표보다 보기 좋은 상세 비교 영역
+        # 10. 상세 비교
         st.subheader("🔎 보장내용 상세 비교")
 
         important_sections = [
@@ -276,7 +293,7 @@ PDF 텍스트:
                     st.markdown(f"**{file_name}**")
                     st.markdown(formatted_value)
 
-        # 12. CSV 다운로드
+        # 11. CSV 다운로드
         csv = vertical_df.to_csv().encode("utf-8-sig")
 
         st.download_button(
@@ -286,7 +303,7 @@ PDF 텍스트:
             mime="text/csv"
         )
 
-        # 13. 파일별 전체 상세 보기
+        # 12. 파일별 전체 상세 보기
         st.subheader("📌 파일별 전체 상세 보기")
 
         for res in all_results:
@@ -298,4 +315,3 @@ PDF 텍스트:
                             st.markdown(format_benefit_text(value))
                         else:
                             st.write(f"**{key}**: {value}")
-                        
